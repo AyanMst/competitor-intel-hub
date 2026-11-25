@@ -1,0 +1,144 @@
+# Competitor Intel Hub — central system configuration
+# All paths are relative to the project root unless noted otherwise.
+
+system:
+  name: competitor-intel-hub
+  version: "0.1.0"
+  environment: development  # development | staging | production
+
+directories:
+  data: data
+  raw_transcripts: data/raw/transcripts
+  processed: data/processed
+  reports: output/reports
+  logs: logs
+  # Durable landing spot for mp4 uploads accepted by POST /analyze-video.
+  # Async Job Queue: the upload must survive past the
+  # HTTP request (which now returns immediately) so the background worker
+  # can read it later. Keyed by the upload's own content hash, so re-uploads
+  # of identical bytes overwrite the same file instead of piling up.
+  pending_uploads: data/pending_uploads
+
+# Pre-flight Validation: POST /analyze-video rejects any upload
+# over this size with a 400, before it's ever persisted to
+# directories.pending_uploads or enqueued as a job.
+uploads:
+  max_file_size_mb: 500
+
+logging:
+  level: INFO  # DEBUG | INFO | WARNING | ERROR
+  format: json  # json | console
+  file: logs/app.log
+
+sources:
+  youtube:
+    enabled: true
+    channels: []
+    # Example:
+    # - id: UCxxxxxxxx
+    #   name: Example Channel
+    #   url: https://www.youtube.com/@example
+    # NOTE: the list above is legacy/reference only. Scheduled Channel
+    # Monitoring reads tracked channels from the `tracked_channels`
+    # Supabase table (managed via the /channels endpoints), not from here.
+    poll_interval_minutes: 30  # how often the scheduler checks tracked channels for new uploads
+    videos_per_channel_per_poll: 5  # how many of a channel's most recent uploads to inspect each cycle
+    # Pre-flight Validation: POST /analyze rejects any video longer
+    # than this with a 400, before it ever reaches the job queue — keeps a
+    # single job's Whisper+LLM cost/runtime bounded for the beta.
+    max_duration_minutes: 60
+    playlists: []
+    video_urls: []
+  tiktok:
+    enabled: false
+    profiles: []
+    video_urls: []
+
+scrapers:
+  youtube:
+    preferred_languages: ["en"]
+    fallback_to_metadata: true  # use title/description when transcript unavailable
+    request_timeout_seconds: 30
+  tiktok:
+    fallback_to_metadata: true
+    request_timeout_seconds: 30
+
+analysers:
+  model: gpt-4o-mini  # override via env if needed
+  max_tokens: 4096
+  temperature: 0.2
+  batch_size: 5
+  chunk_size: 1000  # max characters per logical text chunk
+  words_per_minute: 200  # average reading speed for time estimates
+
+generators:
+  report_format: markdown
+  include_metadata: true
+  include_timestamps: false
+  filename_template: "{source}_{video_id}_{date}.md"
+
+notifications:
+  enabled: true  # master switch; also gated per-report on LLMAgent.compare_reports' has_changes flag
+  slack:
+    enabled: true  # webhook URL itself lives in .env as SLACK_WEBHOOK_URL, never here
+
+# Async Job Queue: src/workers/job_worker.py polls the
+# `analysis_jobs` table on this interval and processes up to
+# max_concurrent_jobs pending rows at a time, tied into the same in-process
+# APScheduler instance as the channel monitor (see api.py startup).
+jobs:
+  poll_interval_seconds: 15
+  max_concurrent_jobs: 3
+  # Orphan Job Recovery: a separate, much less
+  # frequent APScheduler job (see api.py startup) that reaps rows left
+  # stuck in 'transcribing'/'analyzing' by a crashed/killed worker.
+  # orphan_timeout_minutes must comfortably exceed how long a normal job
+  # ever legitimately takes, or healthy-but-slow jobs get requeued mid-run
+  # while still genuinely alive — 15 min was too tight for a long video
+  # (Whisper chunking + LLM analysis on a near-60-min upload can legitimately
+  # run well past that) and every such false-positive reap is exactly the
+  # zombie-write scenario finalize_job_status's Compare-and-Swap now guards
+  # against, so raising this is real risk reduction, not just a bigger
+  # number. 90 min comfortably covers even a max-duration (60 min,
+  # sources.youtube.max_duration_minutes) video's full pipeline.
+  orphan_reap_interval_minutes: 5
+  orphan_timeout_minutes: 90
+
+# PAYWALL (Monetization Gating): gates POST /analyze and POST /analyze-video
+# only (see src/billing/dependencies.py's require_entitlement) once a beta
+# user's trial has passed, unless a confirmed Stripe payment (webhook-driven,
+# see src/billing/routes.py) has activated their entitlement. Stripe
+# credentials themselves live in .env (STRIPE_SECRET_KEY,
+# STRIPE_WEBHOOK_SECRET, STRIPE_PAYMENT_LINK_URL) — never here.
+billing:
+  trial_days: 14
+
+# ACCOUNT LIFECYCLE: user-facing "delete my account" requires this exact
+# confirmation string in the POST /account/delete-request body. Phase 1
+# (revoke access + delete local uploads) runs immediately. Phase 2
+# (DELETE from analysis_jobs / reports / auth.users) is NEVER automatic —
+# see scripts/purge_deleted_account.py, which requires
+# --confirm-delete-analysis-jobs and is not wired into any route.
+account:
+  deletion_confirmation: DELETE
+
+# Observability (additive instrumentation only). DSNs and API keys stay in
+# env — never here. Backend: SENTRY_DSN, optional SENTRY_ENVIRONMENT.
+# Frontend: NEXT_PUBLIC_SENTRY_DSN, NEXT_PUBLIC_POSTHOG_KEY,
+# NEXT_PUBLIC_POSTHOG_HOST. Event names below are the contract for
+# frontend conversion tracking (see frontend/lib/analytics.ts).
+# Uptime monitors should hit GET {backend}{uptime.backend_health_path}
+# — setup steps live in docs/observability.md, not in application code.
+observability:
+  sentry:
+    # Crash reporting only. Keep at 0 so we do not add request-tracing
+    # spans on the HTTP path or the in-process job worker.
+    traces_sample_rate: 0.0
+  analytics:
+    provider: posthog
+    events:
+      signup: signup
+      first_battlecard_generated: first_battlecard_generated
+      paywall_hit: paywall_hit
+  uptime:
+    backend_health_path: /health

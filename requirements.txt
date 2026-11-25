@@ -1,0 +1,56 @@
+# NOTE — system dependency, not installable via pip: `ffmpeg` (which
+# bundles `ffprobe`) must also be present on PATH in every environment this
+# runs in. Used by src/scrapers/youtube_scraper.py's Whisper-fallback audio
+# chunking, moviepy, and api.py's ffprobe-based upload duration check
+# (Upload Duration Cap — the 60-minute cost-control guard for
+# POST /analyze-video). See the root Dockerfile, which installs it via
+# apt-get for Render deployment; install it locally with your OS package
+# manager (e.g. `brew install ffmpeg`) for local dev.
+
+# Configuration
+pyyaml>=6.0.1
+
+# YouTube fetching
+youtube-transcript-api>=0.6.2
+yt-dlp>=2024.8.6
+
+# Scheduled channel monitoring
+apscheduler>=3.10.4
+
+# Local video audio extraction (for videos without built-in subtitles)
+moviepy>=2.1.2
+
+# OpenAI SDK (Whisper transcription + semantic LLM analysis)
+openai>=1.0.0
+
+# Structured logging
+structlog>=24.1.0
+
+# Environment variable support (optional overrides for config)
+python-dotenv>=1.0.0
+
+# API server
+fastapi==0.139.2
+uvicorn==0.51.0
+
+# Supabase persistence layer (reports table)
+supabase==2.31.0
+
+# Slack Incoming Webhook alerts for Notable-Change Notifications
+requests>=2.31.0
+
+# Retry logic (exponential backoff) for OpenAI calls in LLMAgent — Silent-
+# Failure Fix, Async Job Queue the async job queue
+tenacity>=8.2.0
+
+# Error monitoring (crash reporting). api.py inits Sentry via
+# src/observability/sentry_init.py (FastAPI/Starlette integrations, no
+# per-endpoint wrapping). job_worker.py keeps its own existing init so a
+# standalone worker process still reports; this batch does not add new
+# Sentry wrapping on that path. No-op when SENTRY_DSN is unset.
+sentry-sdk>=2.0.0
+
+# Paywall (Monetization Gating): Payment Link checkout-URL building +
+# webhook signature verification (src/billing/stripe_client.py). No calls to
+# the Checkout Sessions API are made — see that module's docstring.
+stripe>=12.0.0

@@ -1,0 +1,14 @@
+# Keep the backend image small and avoid shipping the Next.js frontend
+# (deployed separately, e.g. Vercel) or local dev/runtime artifacts into
+# the FastAPI (api.py) Docker image.
+.venv/
+__pycache__/
+*.pyc
+frontend/
+outputs/
+data/
+logs/
+.env
+.env.*
+.git/
+.DS_Store
